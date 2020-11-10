@@ -19,10 +19,11 @@ from prettytable import PrettyTable
 
 def train(model, iterator, optimizer, criterion):
     model.train()
+    decision_criterion = nn.BCEWithLogitsLoss()
     for i, batch in enumerate(iterator):
         tokens_x_2d, entities_x_3d, postags_x_2d, triggers_y_2d, arguments_2d, seqlens_1d, head_indexes_2d, words_2d, triggers_2d = batch
         optimizer.zero_grad()
-        trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys = model.module.predict_triggers(tokens_x_2d=tokens_x_2d, entities_x_3d=entities_x_3d,
+        trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys, trigger_info, auxiliary_feature = model.module.predict_triggers(tokens_x_2d=tokens_x_2d, entities_x_3d=entities_x_3d,
                                                                   postags_x_2d=postags_x_2d, head_indexes_2d=head_indexes_2d,
                                                                   triggers_y_2d=triggers_y_2d, arguments_2d=arguments_2d)
 
@@ -51,12 +52,26 @@ def train(model, iterator, optimizer, criterion):
                 argument_logits, arguments_y_1d, argument_hat_1d, argument_hat_2d = model.module.module_predict_arguments(argument_hidden, argument_keys, arguments_2d, module_arg)
                 argument_loss = criterion(argument_logits, arguments_y_1d)
                 loss += 2 * argument_loss
-            # if i == 0:
-            #     print("=====sanity check for arguments======")
-            #     print('arguments_y_1d:', arguments_y_1d)
-            #     print("arguments_2d[0]:", arguments_2d[0]['events'])
-            #     print("argument_hat_2d[0]:", argument_hat_2d[0]['events'])
-            #     print("=======================")
+
+                # meta classifier
+                module_decisions_logit, module_decisions_y, argument_hat_2d = model.module.meta_classifier(argument_keys, arguments_2d, trigger_info, argument_logits, argument_hat_1d, auxiliary_feature, module_arg)
+        
+                module_decisions_logit = module_decisions_logit.view(-1)
+                # print('Module decision logit \n {}'.format(module_decisions_logit))
+                # print('Module decision true \n {}'.format(module_decisions_y))
+                # print('module decision logit shape={}'.format(module_decisions_logit.shape))
+                # print('module decision true shape={}'.format(module_decisions_y.shape))
+                # input('')
+                decision_loss = decision_criterion(module_decisions_logit, module_decisions_y)
+                loss += 2 * decision_loss
+        if i == 0:
+            print("=====sanity check for arguments======")
+            print('arguments_y_1d:', arguments_y_1d)
+            print("arguments_2d[0]:", arguments_2d[0]['events'])
+            print("argument_hat_2d[0]:", argument_hat_2d[0]['events'])
+            print("module decision y = {}".format(module_decisions_y))
+            print("module decision pred = {}".format(torch.round(torch.sigmoid(module_decisions_logit))))
+            print("=======================")
           #else:
               #loss = trigger_loss
 
@@ -86,7 +101,7 @@ def train(model, iterator, optimizer, criterion):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", type=int, default=24)
-    parser.add_argument("--ft_batch_size", type=int, default=1)
+    parser.add_argument("--ft_batch_size", type=int, default=24)
     parser.add_argument("--lr", type=float, default=0.00002)
     parser.add_argument("--n_epochs", type=int, default=30)
     parser.add_argument("--logdir", type=str, default="logdir")
@@ -103,7 +118,7 @@ if __name__ == "__main__":
     parser.add_argument("--telegram_bot_token", type=str, default="")
     parser.add_argument("--telegram_chat_id", type=str, default="")
 
-    parser.add_argument("--mix_train_dev", type=bool, default=False)
+    parser.add_argument("--mix_train_dev", type=bool, default=True)
     parser.add_argument("--shuffle_dataset", type=bool, default=True)
     parser.add_argument("--dev_split", type=float, default=0.05)
     parser.add_argument("--novel_shot", type=int, default=5)

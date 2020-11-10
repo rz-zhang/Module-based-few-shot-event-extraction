@@ -64,6 +64,11 @@ class Net(nn.Module):
         self.fc_argument_26 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
         self.fc_argument_27 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
 
+        self.top_select = nn.Sequential(
+                nn.Linear(1+1+3+768, 1),
+                #nn.Sigmoid()
+        )
+
         self.device = device
 
     def module_select(self, module_argument):
@@ -110,6 +115,8 @@ class Net(nn.Module):
         trigger_hat_2d = trigger_logits.argmax(-1)
 
         argument_hidden, argument_keys = [], []
+        trigger_info = [] # for meta classifier
+        auxiliary_feature = [] # for meta classifier
         for i in range(batch_size):
             candidates = arguments_2d[i]['candidates']
             golden_entity_tensors = {}
@@ -118,9 +125,11 @@ class Net(nn.Module):
                 e_start, e_end, e_type_str = candidates[j]
                 golden_entity_tensors[candidates[j]] = x[i, e_start:e_end, ].mean(dim=0)
 
-            predicted_triggers = find_triggers([idx2trigger[trigger] for trigger in trigger_hat_2d[i].tolist()])
+            #predicted_triggers = find_triggers([idx2trigger[trigger] for trigger in trigger_hat_2d[i].tolist()]) # predicted triggers
+            predicted_triggers = find_triggers([idx2trigger[trigger] for trigger in triggers_y_2d[i].tolist()]) # real triggers
+
             for predicted_trigger in predicted_triggers:
-                t_start, t_end, t_type_str = predicted_trigger
+                t_start, t_end, t_type_str, original_trigger = predicted_trigger
                 event_tensor = x[i, t_start:t_end, ].mean(dim=0)
                 for j in range(len(candidates)):
                     e_start, e_end, e_type_str = candidates[j]
@@ -128,8 +137,10 @@ class Net(nn.Module):
 
                     argument_hidden.append(torch.cat([event_tensor, entity_tensor]))
                     argument_keys.append((i, t_start, t_end, t_type_str, e_start, e_end, e_type_str))
+                    trigger_info.append(original_trigger)
+                    auxiliary_feature.append(enc[i, 0: ,].mean(dim=0))
 
-        return trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys
+        return trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys, trigger_info, auxiliary_feature
 
     def predict_arguments(self, argument_hidden, argument_keys, arguments_2d):
         argument_hidden = torch.stack(argument_hidden)
@@ -189,6 +200,47 @@ class Net(nn.Module):
             argument_hat_2d[i]['events'][(st, ed, event_type_str)].append((e_st, e_ed, a_label))
 
         return argument_logits, arguments_y_1d, argument_hat_1d, argument_hat_2d
+
+    def meta_classifier(self, argument_keys, arguments_2d, trigger_info, argument_logits, argument_hat_1d, auxiliary_feature, module):
+        # Input: trigger_info, argument_logits, auxiliary features
+        # Output: decision to each module
+        trigger_info = torch.FloatTensor(trigger_info).to(self.device)
+        trigger_info = trigger_info.view(-1, 1)
+        module_info = self.argument2idx[module]
+        module_info = torch.full(trigger_info.shape, module_info, dtype=torch.float).to(self.device)
+        auxiliary_feature = torch.stack(auxiliary_feature)
+        
+        meta_input = torch.cat([trigger_info, module_info, argument_logits, auxiliary_feature], dim = 1)
+        #meta_input = torch.cat([trigger_info, auxiliary_feature, module_info], dim = 1)
+        #meta_input = torch.cat([trigger_info, module_info], dim = 1)
+
+        module_decisions_logit = self.top_select(meta_input)
+        module_decisions_hat = torch.round(torch.sigmoid(module_decisions_logit))
+        module_decisions_y = []
+        for i, t_start, t_end, t_type_str, e_start, e_end, e_type_str in argument_keys:
+            decision = 0
+            if (t_start, t_end, t_type_str) in arguments_2d[i]['events']:
+                for (a_start, a_end, a_type_idx) in arguments_2d[i]['events'][(t_start, t_end, t_type_str)]:
+                    if e_start == a_start and e_end == a_end:
+                        decision = 1
+                        break
+            module_decisions_y.append(decision)
+        module_decisions_y = torch.FloatTensor(module_decisions_y).to(self.device)
+
+        batch_size = len(arguments_2d)
+        argument_hat_2d = [{'events': {}} for _ in range(batch_size)]
+        for (i, st, ed, event_type_str, e_st, e_ed, entity_type), a_label, decision in zip(argument_keys, argument_hat_1d.cpu().numpy(), module_decisions_hat.detach().cpu().numpy()):
+            if decision == 0:
+                continue
+            if a_label!=2:
+                continue
+            if (st, ed, event_type_str) not in argument_hat_2d[i]['events']:
+                argument_hat_2d[i]['events'][(st, ed, event_type_str)] = []
+            argument_hat_2d[i]['events'][(st, ed, event_type_str)].append((e_st, e_ed, a_label))
+        
+
+        return module_decisions_logit, module_decisions_y, argument_hat_2d
+
 
 
 # Reused from https://github.com/lx865712528/EMNLP2018-JMEE
