@@ -1,6 +1,6 @@
 import numpy as np
-
-from consts import NONE, PAD
+import copy
+from consts import NONE, PAD, TRIGGERS
 
 
 def build_vocab(labels, BIO_tagging=True):
@@ -60,12 +60,14 @@ def find_triggers(labels):
     :param labels: ['B-Conflict:Attack', 'I-Conflict:Attack', 'O', 'B-Life:Marry']
     :return: [(0, 2, 'Conflict:Attack'), (3, 4, 'Life:Marry')]
     """
+    all_triggers, trigger2idx, idx2trigger = build_vocab(TRIGGERS)
     result = []
+    original_labels = copy.deepcopy(labels)
     labels = [label.split('-') for label in labels]
 
     for i in range(len(labels)):
         if labels[i][0] == 'B':
-            result.append([i, i + 1, labels[i][1]])
+            result.append([i, i + 1, labels[i][1], trigger2idx[original_labels[i]]])
 
     for item in result:
         j = item[1]

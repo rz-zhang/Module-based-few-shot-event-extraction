@@ -1,15 +1,129 @@
 import os
 import argparse
-
 import torch
 import torch.nn as nn
-from torch.utils import data
+import copy
+import random
 
+from torch.utils import data
 from model import Net
 from consts import ARGUMENTS
-
-from data_load import ACE2005Dataset, pad, all_triggers, all_entities, all_postags, idx2trigger
+from data_load import ACE2005Dataset, ACE2005DatasetBase, ACE2005DatasetNovel, pad, all_triggers, all_entities, all_postags, idx2trigger
 from utils import calc_metric, find_triggers, build_vocab
+from prettytable import PrettyTable
+
+
+
+
+def find_overlap(arguments_pred_in):
+    "e.g. argument_pred_in = (i, t_type_str, index, a_type_idx)"
+    arguments_pred = copy.deepcopy(arguments_pred_in)
+    overlap_part_index, no_overlap_part_index = [], []
+    argu_dict = {}
+    total_len = len(arguments_pred)
+    for i in range(total_len):
+        key = (arguments_pred[i][0], arguments_pred[i][2])
+        if key in argu_dict.keys():
+            argu_dict[key].append(i)
+        else:
+            argu_dict[key] = [i]
+        # if key in argu_dict.keys():
+        #     argu_dict[key] += 1
+        # else:
+        #     argu_dict[key] = 1
+
+    for key, value in argu_dict.items():
+        if len(value)>1:
+            temp_overlap_part_index = []
+            for item in value:
+                temp_overlap_part_index.append(item)
+            overlap_part_index.append(temp_overlap_part_index)
+        else:
+            no_overlap_part_index.append(value[0])
+    # for key, value in argu_dict.items():
+    #     if value > 1:
+    #         for i, x in enumerate(arguments_pred):
+    #             if key == (x[0], x[2]):
+    #               overlap_part_index.append(i)
+    #overlap_part = [arguments_pred[i] for i in range(total_len) if i in overlap_part_index]
+    #no_overlap_part = [arguments_pred[i] for i in range(total_len) if i in no_overlap_part_index]
+
+    return overlap_part_index, no_overlap_part_index, argu_dict
+
+def eval_token_level(arguments_true, arguments_pred):
+    """arguments_true.append((i, t_type_str, a_start, a_end, a_type_idx))"""
+    new_argu_true = []
+    new_argu_pred = []
+    for item in arguments_true:
+        i, t_type_str, a_start, a_end, a_type_idx = item
+        for index in range(a_start+1, a_end+1):
+            new_argu_true.append((i, t_type_str, index, a_type_idx))
+    for item in arguments_pred:
+        i, t_type_str, a_start, a_end, a_type_idx = item
+        for index in range(a_start+1, a_end+1):
+            new_argu_pred.append((i, t_type_str, index, a_type_idx))
+
+    overlap_part_index, no_overlap_part_index, argu_dict = find_overlap(new_argu_true)
+    print('Length of the overlapping:\n {}'.format(len(overlap_part_index)))
+    print('Length of the NON-overlapping:\n {}'.format(len(no_overlap_part_index)))
+
+    # No_overlap_part
+    total_len = len(new_argu_true)
+    no_overlap_part = [new_argu_true[i] for i in range(total_len) if i in no_overlap_part_index]
+    p, r, f = calc_metric(new_argu_true, no_overlap_part)
+    print('Precison = {}\n Recall = {}\n F1 = {}\n'.format(p, r, f))
+
+    # Overlap_part Random select
+    overlap_part_select = []
+    mismatch_count = 0
+    mismatch_set = []
+    for items in overlap_part_index:
+        temp_a_type = new_argu_true[items[0]][-1]
+        mismatch = []
+        mismatch.append(idx2argument[temp_a_type])
+        for item in items:
+            if temp_a_type != new_argu_true[item][-1]:
+                # print('*** Mismatch ***')
+                # print('*** Current A_TYPE = {}***'.format(temp_a_type))
+                # print(new_argu_true[item])
+                mismatch.append(idx2argument[new_argu_true[item][-1]])
+                mismatch_count += 1
+            overlap_part_select.append(new_argu_true[item])
+        mismatch = set(mismatch)
+        mismatch_set.append(mismatch)
+
+            
+    print('MISMATCH COUNT = {}'.format(mismatch_count))
+    print('MISMATCH_SET = {}'.format(mismatch_set))
+        
+    # for items in overlap_part_index:
+    #     temp_len = len(items)
+    #     select_index = items[random.randint(0, temp_len-1)]
+    #     try:
+    #         overlap_part_select.append(new_argu_true[select_index])
+    #     except:
+    #         print(select_index)
+    #         print(total_len)
+
+    p, r, f = calc_metric(new_argu_true, overlap_part_select)
+    print('Precison = {}\n Recall = {}\n F1 = {}\n'.format(p, r, f))
+
+    # Select max probablity
+
+def eval_token_level_all(arguments_true, arguments_pred):
+    """arguments_true.append((i, t_type_str, a_start, a_end, a_type_idx))"""
+    new_argu_true = []
+    new_argu_pred = []
+    for item in arguments_true:
+        i, t_type_str, a_start, a_end, a_type_idx = item
+        for index in range(a_start+1, a_end+1):
+            new_argu_true.append((i, t_type_str, index, a_type_idx))
+    for item in arguments_pred:
+        i, t_type_str, a_start, a_end, a_type_idx = item
+        for index in range(a_start+1, a_end+1):
+            new_argu_pred.append((i, t_type_str, index, a_type_idx))
+    p, r, f = calc_metric(new_argu_true, new_argu_pred)
+    print('Precison = {}\n Recall = {}\n F1 = {}\n'.format(p, r, f))
 
 
 def eval(model, iterator, fname, idx2argument):
@@ -107,7 +221,7 @@ def eval_module(model, iterator, fname, module, idx2argument):
         for i, batch in enumerate(iterator):
             tokens_x_2d, entities_x_3d, postags_x_2d, triggers_y_2d, arguments_2d, seqlens_1d, head_indexes_2d, words_2d, triggers_2d = batch
 
-            trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys = model.module.predict_triggers(tokens_x_2d=tokens_x_2d, entities_x_3d=entities_x_3d,
+            trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys, trigger_info, auxiliary_feature = model.module.predict_triggers(tokens_x_2d=tokens_x_2d, entities_x_3d=entities_x_3d,
                                                                   postags_x_2d=postags_x_2d, head_indexes_2d=head_indexes_2d,
                                                                   triggers_y_2d=triggers_y_2d, arguments_2d=arguments_2d)
 
@@ -118,6 +232,7 @@ def eval_module(model, iterator, fname, module, idx2argument):
 
             if len(argument_keys) > 0:
                 argument_logits, arguments_y_1d, argument_hat_1d, argument_hat_2d = model.module.module_predict_arguments(argument_hidden, argument_keys, arguments_2d, module)
+                module_decisions_logit, module_decisions_y, argument_hat_2d = model.module.meta_classifier(argument_keys, arguments_2d, trigger_info, argument_logits, argument_hat_1d, auxiliary_feature, module)
                 arguments_hat_all.extend(argument_hat_2d)
             else:
                 batch_size = len(arguments_2d)
@@ -183,9 +298,9 @@ def eval_module(model, iterator, fname, module, idx2argument):
     print('P={:.3f}\tR={:.3f}\tF1={:.3f}'.format(argument_p, argument_r, argument_f1))
     
     #print('[trigger identification]')
-    triggers_true = [(item[0], item[1], item[2]) for item in triggers_true]
-    triggers_pred = [(item[0], item[1], item[2]) for item in triggers_pred]
-    trigger_p_, trigger_r_, trigger_f1_ = calc_metric(triggers_true, triggers_pred)
+    # triggers_true = [(item[0], item[1], item[2]) for item in triggers_true]
+    # triggers_pred = [(item[0], item[1], item[2]) for item in triggers_pred]
+    # trigger_p_, trigger_r_, trigger_f1_ = calc_metric(triggers_true, triggers_pred)
     #print('P={:.3f}\tR={:.3f}\tF1={:.3f}'.format(trigger_p_, trigger_r_, trigger_f1_))
 
     #print('[argument identification]')
@@ -193,34 +308,39 @@ def eval_module(model, iterator, fname, module, idx2argument):
     #arguments_true = [(item[0], item[1], item[2], item[3], item[4], item[5]) for item in arguments_true]
     #arguments_pred = [(item[0], item[1], item[2], item[3], item[4], item[5]) for item in arguments_pred]
     # relax metric
-    arguments_true = [(item[0], item[1], item[2], item[3]) for item in arguments_true]
-    arguments_pred = [(item[0], item[1], item[2], item[3]) for item in arguments_pred]
-    argument_p_, argument_r_, argument_f1_ = calc_metric(arguments_true, arguments_pred)
+    # arguments_true = [(item[0], item[1], item[2], item[3]) for item in arguments_true]
+    # arguments_pred = [(item[0], item[1], item[2], item[3]) for item in arguments_pred]
+    # argument_p_, argument_r_, argument_f1_ = calc_metric(arguments_true, arguments_pred)
     #print('P={:.3f}\tR={:.3f}\tF1={:.3f}'.format(argument_p_, argument_r_, argument_f1_))
 
     metric = '[trigger classification]\tP={:.3f}\tR={:.3f}\tF1={:.3f}\n'.format(trigger_p, trigger_r, trigger_f1)
-    metric += '[argument classification]\tP={:.3f}\tR={:.3f}\tF1={:.3f}\n'.format(argument_p, argument_r, argument_f1)
-    metric += '[trigger identification]\tP={:.3f}\tR={:.3f}\tF1={:.3f}\n'.format(trigger_p_, trigger_r_, trigger_f1_)
-    metric += '[argument identification]\tP={:.3f}\tR={:.3f}\tF1={:.3f}\n'.format(argument_p_, argument_r_, argument_f1_)
-    final = fname + ".P%.2f_R%.2f_F%.2f" % (trigger_p, trigger_r, trigger_f1)
+    # metric += '[argument classification]\tP={:.3f}\tR={:.3f}\tF1={:.3f}\n'.format(argument_p, argument_r, argument_f1)
+    # metric += '[trigger identification]\tP={:.3f}\tR={:.3f}\tF1={:.3f}\n'.format(trigger_p_, trigger_r_, trigger_f1_)
+    # metric += '[argument identification]\tP={:.3f}\tR={:.3f}\tF1={:.3f}\n'.format(argument_p_, argument_r_, argument_f1_)
+    # final = fname + ".P%.2f_R%.2f_F%.2f" % (trigger_p, trigger_r, trigger_f1)
     # with open(final, 'w') as fout:
     #     result = open("temp", "r").read()
     #     fout.write("{}\n".format(result))
     #     fout.write(metric)
     # os.remove("temp")
-    return metric, argument_f1, num_proposed, num_correct, num_gold
+    return metric, argument_f1, num_proposed, num_correct, num_gold #,arguments_true, arguments_pred
 
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--gpu", type=str, default="0")
     parser.add_argument("--logdir", type=str, default="logdir")
     parser.add_argument("--batch_size", type=int, default=24)
     parser.add_argument("--testset", type=str, default="data/test.json")
     parser.add_argument("--model_path", type=str, default="latest_model.pt")
     parser.add_argument("--module_arg", type=str, default="all")
+    parser.add_argument("--eval_finetune", type=bool, default=True)
+    parser.add_argument("--novel_event", type=list, default= ['Justice:Convict', 'Personnel:Elect', 'Life:Marry', 'Business:Start-Org', 'Personnel:Start-Position'])
+
 
     hp = parser.parse_args()
+    os.environ["CUDA_VISIBLE_DEVICES"] = hp.gpu
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     if not os.path.exists(hp.model_path):
@@ -236,7 +356,11 @@ if __name__ == "__main__":
     elif hp.module_arg in ARGUMENTS:
         all_arguments, argument2idx, idx2argument = build_vocab([hp.module_arg], BIO_tagging=False)
 
-    test_dataset = ACE2005Dataset(hp.testset, all_arguments, argument2idx)
+    if hp.eval_finetune:
+        novel_event = hp.novel_event
+        test_dataset = ACE2005DatasetNovel(hp.testset, all_arguments, argument2idx, novel_event=novel_event, novel_shot=1000)
+    else:
+        test_dataset = ACE2005Dataset(hp.testset, all_arguments, argument2idx)
 
     test_iter = data.DataLoader(dataset=test_dataset,
                                 batch_size=hp.batch_size,
@@ -248,4 +372,30 @@ if __name__ == "__main__":
         os.makedirs(hp.logdir)
 
     print(f"=========eval test=========")
-    eval(model, test_iter, 'eval_test')
+    # eval(model, test_iter, 'eval_test')
+    test_table = PrettyTable(['Argument',  'F1', 'Num_proposed', 'Num_correct', 'Num_gold'])
+    test_proposed, test_correct, test_gold = 0, 0, 0
+    arguments_true_all, arguments_pred_all = [], []
+    for module in ARGUMENTS:
+        print('---------Argument={}---------'.format(module))
+        metric_test, test_arg_f1, num_proposed, num_correct, num_gold = eval_module(model, test_iter, '_', module, idx2argument)
+        test_proposed += num_proposed
+        test_correct += num_correct 
+        test_gold += num_gold
+        #arguments_true_all.extend(arguments_true)
+        #arguments_pred_all.extend(arguments_pred)
+        #eval_token_level_all(arguments_true, arguments_pred)
+        test_table.add_row([module, round(test_arg_f1,3), num_proposed, num_correct, num_gold])
+    if test_correct==0 or test_proposed==0:
+        test_p = 0
+    else:
+        test_p = test_correct/test_proposed
+    test_r = test_correct/test_gold
+    if test_p + test_r ==0:
+        test_f1 =0
+    else:
+        test_f1 = test_p*test_r*2/(test_p+test_r)
+    test_table.add_row(['All', round(test_f1, 3), test_proposed, test_correct, test_gold])
+    print(test_table)
+    #print('Token Level Evaluation\n')
+    #eval_token_level_all(arguments_true_all, arguments_pred_all)

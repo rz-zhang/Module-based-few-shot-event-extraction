@@ -22,7 +22,7 @@ def train(model, iterator, optimizer, criterion):
     for i, batch in enumerate(iterator):
         tokens_x_2d, entities_x_3d, postags_x_2d, triggers_y_2d, arguments_2d, seqlens_1d, head_indexes_2d, words_2d, triggers_2d = batch
         optimizer.zero_grad()
-        trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys = model.module.predict_triggers(tokens_x_2d=tokens_x_2d, entities_x_3d=entities_x_3d,
+        trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys , trigger_info, auxiliary_feature= model.module.predict_triggers(tokens_x_2d=tokens_x_2d, entities_x_3d=entities_x_3d,
                                                                   postags_x_2d=postags_x_2d, head_indexes_2d=head_indexes_2d,
                                                                   triggers_y_2d=triggers_y_2d, arguments_2d=arguments_2d)
 
@@ -51,6 +51,11 @@ def train(model, iterator, optimizer, criterion):
                 argument_logits, arguments_y_1d, argument_hat_1d, argument_hat_2d = model.module.module_predict_arguments(argument_hidden, argument_keys, arguments_2d, module_arg)
                 argument_loss = criterion(argument_logits, arguments_y_1d)
                 loss += 2 * argument_loss
+
+                # meta classifier
+                module_decisions_logit, module_decisions_y, argument_hat_2d = model.module.meta_classifier(trigger_info, argument_logits, argument_hat_1d, auxiliary_feature)
+                decision_loss = criterion(module_decisions_logit, module_decisions_y)
+                loss += decision_loss
             # if i == 0:
             #     print("=====sanity check for arguments======")
             #     print('arguments_y_1d:', arguments_y_1d)
@@ -59,6 +64,13 @@ def train(model, iterator, optimizer, criterion):
             #     print("=======================")
           #else:
               #loss = trigger_loss
+
+        # Meta-classifier
+        # for module_arg in ARGUMENTS:
+        #     if len(argument_keys) > 0:
+        #         argument_logits, arguments_y_1d, argument_hat_1d, argument_hat_2d = model.module.module_predict_arguments(argument_hidden, argument_keys, arguments_2d, module_arg)
+                
+
 
 
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
