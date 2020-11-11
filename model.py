@@ -35,34 +35,10 @@ class Net(nn.Module):
             #nn.ReLU(),
             #nn.Linear(argument_size, argument_size),
         )
-        self.fc_argument_0 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_1 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_2 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_3 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_4 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_5 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_6 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_7 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_8 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_9 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_10 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_11 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_12 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_13 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_14 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_15 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_16 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_17 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_18 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_19 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_20 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_21 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_22 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_23 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_24 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_25 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_26 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
-        self.fc_argument_27 = nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),)
+
+        self.module_list = nn.ModuleList(
+            nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),) for _ in range(28)
+        )
 
         self.top_select = nn.Sequential(
                 nn.Linear(1+1+3+768, 1),
@@ -72,15 +48,9 @@ class Net(nn.Module):
         self.device = device
 
     def module_select(self, module_argument):
-        module_list = [None, None, self.fc_argument_0, self.fc_argument_1, self.fc_argument_2, self.fc_argument_3,
-              self.fc_argument_4, self.fc_argument_5, self.fc_argument_6, self.fc_argument_7,
-              self.fc_argument_8, self.fc_argument_9, self.fc_argument_10, self.fc_argument_11,
-              self.fc_argument_12, self.fc_argument_13, self.fc_argument_14, self.fc_argument_15,
-              self.fc_argument_16, self.fc_argument_17, self.fc_argument_18, self.fc_argument_19,
-              self.fc_argument_20, self.fc_argument_21, self.fc_argument_22, self.fc_argument_23,
-              self.fc_argument_24, self.fc_argument_25, self.fc_argument_26, self.fc_argument_27,
-              ]
-        return module_list[module_argument]
+        if module_argument <= 1:
+            return None
+        return self.module_list[module_argument-2]
 
     def predict_triggers(self, tokens_x_2d, entities_x_3d, postags_x_2d, head_indexes_2d, triggers_y_2d, arguments_2d):
         tokens_x_2d = torch.LongTensor(tokens_x_2d).to(self.device)
