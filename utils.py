@@ -55,6 +55,31 @@ def calc_metric(y_true, y_pred, num_flag=False):
       return precision, recall, f1
 
 
+# def find_triggers(labels):
+#     """
+#     :param labels: ['B-Conflict:Attack', 'I-Conflict:Attack', 'O', 'B-Life:Marry']
+#     :return: [(0, 2, 'Conflict:Attack'), (3, 4, 'Life:Marry')]
+#     """
+#     all_triggers, trigger2idx, idx2trigger = build_vocab(TRIGGERS)
+#     result = []
+#     original_labels = copy.deepcopy(labels)
+#     labels = [label.split('-') for label in labels]
+
+#     for i in range(len(labels)):
+#         if labels[i][0] == 'B':
+#             result.append([i, i + 1, labels[i][1], trigger2idx[original_labels[i]]])
+
+#     for item in result:
+#         j = item[1]
+#         while j < len(labels):
+#             if labels[j][0] == 'I':
+#                 j = j + 1
+#                 item[1] = j
+#             else:
+#                 break
+
+#     return [tuple(item) for item in result]
+
 def find_triggers(labels):
     """
     :param labels: ['B-Conflict:Attack', 'I-Conflict:Attack', 'O', 'B-Life:Marry']
@@ -63,11 +88,10 @@ def find_triggers(labels):
     all_triggers, trigger2idx, idx2trigger = build_vocab(TRIGGERS)
     result = []
     original_labels = copy.deepcopy(labels)
-    labels = [label.split('-') for label in labels]
 
     for i in range(len(labels)):
         if labels[i][0] == 'B':
-            result.append([i, i + 1, labels[i][1], trigger2idx[original_labels[i]]])
+            result.append([i, i + 1, labels[i][2:], trigger2idx[original_labels[i]]])
 
     for item in result:
         j = item[1]
@@ -80,6 +104,41 @@ def find_triggers(labels):
 
     return [tuple(item) for item in result]
 
+def srl_split_role(tag):
+    if tag[:2]=='B-' or tag[:2]=='I-':
+        tag = tag[2:]
+    if tag[:2]=='C-' or tag[:2]=='R-':
+        tag=tag[2:]
+    return tag
+
+def srl_find_trigger(srl_tags):
+      start_flag = True
+      tag_start, tag_end = None, None
+      for i, tag in enumerate(srl_tags):
+        if tag.split('-')[-1]=='V' and start_flag:
+          tag_start = i
+          start_flag = False
+        if not start_flag and tag.split('-')[-1]!='V':
+          tag_end = i
+          break
+      return tag_start, tag_end
+
+def srl_find_argument(srl_tags):
+      argument_list = []
+      for i, tag in enumerate(srl_tags):
+        BIO_prefix = tag.split('-')[0]
+        abstract_role = srl_split_role(tag)
+        if BIO_prefix == 'B' and abstract_role!='V':
+          argument_list.append((i, i+1, abstract_role))
+      for i, item in enumerate(argument_list):
+        j = item[1]
+        while j < len(srl_tags):
+          if srl_tags[j].split('-')[0]=='I':
+            j = j+1
+            argument_list[i] = (item[0], j, item[2])
+          else:
+            break
+      return argument_list
 
 # To watch performance comfortably on a telegram when training for a long time
 def report_to_telegram(text, bot_token, chat_id):

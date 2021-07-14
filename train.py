@@ -10,33 +10,27 @@ from torch.utils import data
 
 from model import Net
 
-from consts import ARGUMENTS
-from data_load import ACE2005Dataset, pad, all_triggers, all_entities, all_postags, tokenizer
+from consts import ARGUMENTS, TRIGGERS
+from data_load import ACE2005Dataset, pad, all_triggers, all_triggers_noBIO, all_entities, all_postags, all_srl, tokenizer
 from utils import report_to_telegram, build_vocab
-from eval import eval, eval_module
+from eval import eval, eval_module, eval_gating
 from prettytable import PrettyTable
 
 
-def train(model, iterator, optimizer, criterion):
+def train(model, iterator, optimizer, criterion, module_mode="module", argu_loss_weight=2):
     model.train()
     for i, batch in enumerate(iterator):
-        tokens_x_2d, entities_x_3d, postags_x_2d, triggers_y_2d, arguments_2d, seqlens_1d, head_indexes_2d, words_2d, triggers_2d = batch
+        tokens_x_2d, entities_x_3d, postags_x_2d, triggers_y_2d, arguments_2d, seqlens_1d, head_indexes_2d, words_2d, triggers_2d, srl_arguments, srl_triggers = batch
         optimizer.zero_grad()
-        trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys , trigger_info, auxiliary_feature= model.module.predict_triggers(tokens_x_2d=tokens_x_2d, entities_x_3d=entities_x_3d,
+        trigger_logits, triggers_y_2d, trigger_hat_2d, argument_hidden, argument_keys, trigger_info, auxiliary_feature, srl_gating_index_li = model.module.predict_triggers(tokens_x_2d=tokens_x_2d, entities_x_3d=entities_x_3d,
                                                                   postags_x_2d=postags_x_2d, head_indexes_2d=head_indexes_2d,
-                                                                  triggers_y_2d=triggers_y_2d, arguments_2d=arguments_2d)
-
+                                                                  triggers_y_2d=triggers_y_2d, arguments_2d=arguments_2d, srl_triggers=srl_triggers)
         trigger_logits = trigger_logits.view(-1, trigger_logits.shape[-1])
         trigger_loss = criterion(trigger_logits, triggers_y_2d.view(-1))
         loss = trigger_loss
 
-        # if len(argument_keys) > 0:
-        #     argument_logits, arguments_y_1d, argument_hat_1d, argument_hat_2d = model.module.predict_arguments(argument_hidden, argument_keys, arguments_2d)
-        #     argument_loss = criterion(argument_logits, arguments_y_1d)
-        #     input('Look at batch shape')
-        #     print(arguments_y_1d.shape)
-        #     input('The shape of argument y 1d')
-        #     loss = trigger_loss + 2 * argument_loss
+        
+
         #     if i == 0:
         #         print("=====sanity check for arguments======")
         #         print('arguments_y_1d:', arguments_y_1d)
@@ -45,23 +39,43 @@ def train(model, iterator, optimizer, criterion):
         #         print("=======================")
         # else:
         #     loss = trigger_loss
-
-        for module_arg in ARGUMENTS:
+        if module_mode=="module":
             if len(argument_keys) > 0:
-                argument_logits, arguments_y_1d, argument_hat_1d, argument_hat_2d = model.module.module_predict_arguments(argument_hidden, argument_keys, arguments_2d, module_arg)
-                argument_loss = criterion(argument_logits, arguments_y_1d)
-                loss += 2 * argument_loss
+                argu_logits_li = []
+                for module_arg in ARGUMENTS:
+                    argument_logits, arguments_y_1d, argument_hat_1d, argument_hat_2d = model.module.module_predict_arguments(argument_hidden, argument_keys, arguments_2d, module_arg)
+                    # argument_loss = criterion(argument_logits, arguments_y_1d)
+                    # loss += argu_loss_weight * argument_loss
 
+                    # for gating
+                    argu_logits_li.append(argument_logits)
+                # get the slice of srl triggers
+                srl_gating_triggers_li = []
+                for srl_idx in srl_gating_index_li:
+                    srl_gating_triggers_li.append(srl_triggers[srl_idx])
+                gating_logits, gating_arguments_y_1d, module_decisions_hat_1d, argument_hat_2d = model.module.module_gating(argu_logits_li, srl_gating_triggers_li, argument_keys, arguments_2d)
+                # print('gating logtis',gating_logits)
+                # print('gating y 1d', gating_arguments_y_1d)
+                gating_loss = criterion(gating_logits, gating_arguments_y_1d)
+                loss += argu_loss_weight * gating_loss
+        else:
+            if len(argument_keys) > 0:
+                argument_logits, arguments_y_1d, argument_hat_1d, argument_hat_2d = model.module.predict_arguments(argument_hidden, argument_keys, arguments_2d)
+                # print('argument logtis', argument_logits)
+                # print('arguments_y_1d', arguments_y_1d)
+                argument_loss = criterion(argument_logits, arguments_y_1d)
+                loss += argu_loss_weight * argument_loss
                 # meta classifier
-                module_decisions_logit, module_decisions_y, argument_hat_2d = model.module.meta_classifier(trigger_info, argument_logits, argument_hat_1d, auxiliary_feature)
-                decision_loss = criterion(module_decisions_logit, module_decisions_y)
-                loss += decision_loss
-            # if i == 0:
-            #     print("=====sanity check for arguments======")
-            #     print('arguments_y_1d:', arguments_y_1d)
-            #     print("arguments_2d[0]:", arguments_2d[0]['events'])
-            #     print("argument_hat_2d[0]:", argument_hat_2d[0]['events'])
-            #     print("=======================")
+                # module_decisions_logit, module_decisions_y, argument_hat_2d = model.module.meta_classifier(trigger_info, argument_logits, argument_hat_1d, auxiliary_feature)
+                # decision_loss = criterion(module_decisions_logit, module_decisions_y)
+                # loss += decision_loss
+                # if i == 0:
+                #     print("=====sanity check for arguments======")
+                #     print('arguments_y_1d:', arguments_y_1d)
+                #     print("arguments_2d[0]:", arguments_2d[0]['events'])
+                #     print("argument_hat_2d[0]:", argument_hat_2d[0]['events'])
+                #     print('srl_triggers[0]', srl_triggers[0])
+                #     print("=======================")
           #else:
               #loss = trigger_loss
 
@@ -89,6 +103,7 @@ def train(model, iterator, optimizer, criterion):
             print('trigger_hat_2d[0]:', trigger_hat_2d.cpu().numpy().tolist()[0][:seqlens_1d[0]])
             print("seqlens_1d[0]:", seqlens_1d[0])
             print("arguments_2d[0]:", arguments_2d[0])
+            print("srl_2d[0]", srl_triggers[0])
             print("=======================")
 
         if i % 100 == 0:  # monitoring
@@ -97,26 +112,26 @@ def train(model, iterator, optimizer, criterion):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=24)
     parser.add_argument("--lr", type=float, default=0.00002)
     parser.add_argument("--n_epochs", type=int, default=30)
     parser.add_argument("--logdir", type=str, default="logdir")
-    parser.add_argument("--trainset", type=str, default="data/train.json")
-    parser.add_argument("--devset", type=str, default="data/dev.json")
-    parser.add_argument("--testset", type=str, default="data/test.json")
+    parser.add_argument("--trainset", type=str, default="data/train_srl.json")
+    parser.add_argument("--devset", type=str, default="data/dev_srl.json")
+    parser.add_argument("--testset", type=str, default="data/test_srl.json")
     parser.add_argument("--module_arg", type=str, default="all")
     parser.add_argument("--module_output", type=str, default="module_dir")
     parser.add_argument("--model_save_name", type=str, default="_model.pt")
     parser.add_argument("--result_output", type=str, default="meta_encoder")
     parser.add_argument("--gpu", type=str, default="0")
-
-
+    parser.add_argument("--module_mode", type=str, default="module")
     parser.add_argument("--telegram_bot_token", type=str, default="")
     parser.add_argument("--telegram_chat_id", type=str, default="")
-
     parser.add_argument("--mix_train_dev", type=bool, default=True)
     parser.add_argument("--shuffle_dataset", type=bool, default=True)
     parser.add_argument("--dev_split", type=float, default=0.05)
+    parser.add_argument("--loss_weight", type=int, default=2)
+    parser.add_argument("--eval_mode", type=str, default='gating')
 
     hp = parser.parse_args()
 
@@ -133,14 +148,17 @@ if __name__ == "__main__":
         idx2argument = idx2argument,
         device=device,
         trigger_size=len(all_triggers),
+        trigger_size_noBIO=len(all_triggers_noBIO),
         entity_size=len(all_entities),
+        srl_size=len(all_srl),
         all_postags=len(all_postags),
         argument_size=len(all_arguments)
     )
+
+    
+    model = nn.DataParallel(model)
     if device == 'cuda':
         model = model.cuda()
-
-    model = nn.DataParallel(model)
 
     if hp.mix_train_dev:
         full_dataset = ACE2005Dataset(hp.trainset, all_arguments, argument2idx, hp.devset)
@@ -195,70 +213,104 @@ if __name__ == "__main__":
         os.makedirs(hp.module_output)
 
 
-    dev_arg_f1_max = 0
+    dev_f1_max = 0
 
     for epoch in range(1, hp.n_epochs + 1):
         dev_table = PrettyTable(['Argument',  'F1', 'Num_proposed', 'Num_correct', 'Num_gold'])
         test_table = PrettyTable(['Argument',  'F1', 'Num_proposed', 'Num_correct', 'Num_gold'])
 
-        train(model, train_iter, optimizer, criterion)
+        train(model, train_iter, optimizer, criterion, module_mode=hp.module_mode, argu_loss_weight=hp.loss_weight)
 
         fname = os.path.join(hp.logdir, str(epoch))
-        dev_proposed, dev_correct, dev_gold = 0, 0, 0
-        test_proposed, test_correct, test_gold = 0, 0, 0
-        print(f"=========eval dev at epoch={epoch}=========")
-        for module in ARGUMENTS:
-          print('---------Argument={}---------'.format(module))
-          metric_dev, dev_arg_f1, num_proposed, num_correct, num_gold = eval_module(model, dev_iter, fname + '_dev', module, idx2argument)
-          dev_proposed += num_proposed
-          dev_correct += num_correct 
-          dev_gold += num_gold
-          dev_table.add_row([module, round(dev_arg_f1,3), num_proposed, num_correct, num_gold])
-        if dev_correct==0 or dev_proposed==0:
-          dev_p = 0
-        else:
-          dev_p = dev_correct/dev_proposed
-        dev_r = dev_correct/dev_gold
-        if dev_p + dev_r ==0:
-          dev_f1 = 0
-        else:
-          dev_f1 = dev_p*dev_r*2/(dev_p+dev_r)
-        dev_table.add_row(['All', round(dev_f1, 3), dev_proposed, dev_correct, dev_gold])
-        print(dev_table)
-        
+        if hp.eval_mode=="module":
+            dev_proposed, dev_correct, dev_gold = 0, 0, 0
+            test_proposed, test_correct, test_gold = 0, 0, 0
+            print(f"=========MODULE eval dev at epoch={epoch}=========")
+            for module in ARGUMENTS:
+                print('---------Argument={}---------'.format(module))
+                metric_dev, dev_arg_f1, num_proposed, num_correct, num_gold = eval_module(model, dev_iter, fname + '_dev', module, idx2argument)
+                dev_proposed += num_proposed
+                dev_correct += num_correct 
+                dev_gold += num_gold
+                dev_table.add_row([module, round(dev_arg_f1,3), num_proposed, num_correct, num_gold])
+            if dev_correct==0 or dev_proposed==0:
+                dev_p = 0
+            else:
+                dev_p = dev_correct/dev_proposed
+            dev_r = dev_correct/dev_gold
+            if dev_p + dev_r ==0:
+                dev_f1 = 0
+            else:
+                dev_f1 = dev_p*dev_r*2/(dev_p+dev_r)
+            dev_table.add_row(['All', round(dev_f1, 3), dev_proposed, dev_correct, dev_gold])
+            print(dev_table)
+            
+            print(f"=========MODULE eval test at epoch={epoch}=========")
+            for module in ARGUMENTS:
+                print('---------Argument={}---------'.format(module))
+                metric_test, test_arg_f1, num_proposed, num_correct, num_gold = eval_module(model, test_iter, fname + '_test', module, idx2argument)
+                test_proposed += num_proposed
+                test_correct += num_correct 
+                test_gold += num_gold
+                test_table.add_row([module, round(test_arg_f1,3), num_proposed, num_correct, num_gold])
+            if test_correct==0 or test_proposed==0:
+                test_p = 0
+            else:
+                test_p = test_correct/test_proposed
+            test_r = test_correct/test_gold
+            if test_p + test_r ==0:
+                test_f1 =0
+            else:
+                test_f1 = test_p*test_r*2/(test_p+test_r)
+            test_table.add_row(['All', round(test_f1, 3), test_proposed, test_correct, test_gold])
+            print(test_table)
 
-        print(f"=========eval test at epoch={epoch}=========")
-        for module in ARGUMENTS:
-          print('---------Argument={}---------'.format(module))
-          metric_test, test_arg_f1, num_proposed, num_correct, num_gold = eval_module(model, test_iter, fname + '_test', module, idx2argument)
-          test_proposed += num_proposed
-          test_correct += num_correct 
-          test_gold += num_gold
-          test_table.add_row([module, round(test_arg_f1,3), num_proposed, num_correct, num_gold])
-        if test_correct==0 or test_proposed==0:
-          test_p = 0
-        else:
-          test_p = test_correct/test_proposed
-        test_r = test_correct/test_gold
-        if test_p + test_r ==0:
-          test_f1 =0
-        else:
-          test_f1 = test_p*test_r*2/(test_p+test_r)
-        test_table.add_row(['All', round(test_f1, 3), test_proposed, test_correct, test_gold])
-        print(test_table)
 
+            if dev_f1 >= dev_f1_max:
+                dev_f1_max = dev_f1
+                metric_output = os.path.join(hp.module_output, hp.result_output)
+                model_save_path = os.path.join(hp.module_output, hp.model_save_name)
+                torch.save(model, model_save_path)
+                with open(metric_output, 'a') as fout:
+                    fout.write(f"=========eval dev at epoch={epoch}=========\n")
+                    fout.write(dev_table.get_string())
+                    fout.write(f"\n=========eval test at epoch={epoch}=========\n")
+                    fout.write(test_table.get_string())
+                    fout.write('\n\n')
+        elif hp.eval_mode=='gating':
+            print(f"=========GATING eval dev at epoch={epoch}=========")
+            metric_dev, dev_f1 = eval_gating(model, dev_iter, fname + '_dev', idx2argument)
 
-        if dev_arg_f1 >= dev_arg_f1_max:
-          dev_arg_f1_max = dev_arg_f1
-          metric_output = os.path.join(hp.module_output, hp.result_output)
-          model_save_path = os.path.join(hp.module_output, hp.model_save_name)
-          torch.save(model, model_save_path)
-          with open(metric_output, 'a') as fout:
-            fout.write(f"=========eval dev at epoch={epoch}=========\n")
-            fout.write(dev_table.get_string())
-            fout.write(f"\n=========eval test at epoch={epoch}=========\n")
-            fout.write(test_table.get_string())
-            fout.write('\n\n')
+            print(f"=========GATING eval test at epoch={epoch}=========")
+            metric_test, test_arg_f1 = eval_gating(model, test_iter, fname + '_test', idx2argument)
+            if dev_f1 >= dev_f1_max:
+                dev_f1_max = dev_f1
+                metric_output = os.path.join(hp.module_output, hp.result_output)
+                model_save_path = os.path.join(hp.module_output, hp.model_save_name)
+                torch.save(model, model_save_path)
+                with open(metric_output, 'a') as fout:
+                  fout.write(f"=========eval dev at epoch={epoch}=========\n")
+                  fout.write(metric_dev)
+                  fout.write(f"\n=========eval test at epoch={epoch}=========\n")
+                  fout.write(metric_test)
+                  fout.write('\n\n')
+        else:
+            print(f"=========MULTI eval dev at epoch={epoch}=========")
+            metric_dev, dev_f1 = eval(model, dev_iter, fname + '_dev', idx2argument)
+
+            print(f"=========MULTI eval test at epoch={epoch}=========")
+            metric_test, test_arg_f1 = eval(model, test_iter, fname + '_test', idx2argument)
+            if dev_f1 >= dev_f1_max:
+                dev_f1_max = dev_f1
+                metric_output = os.path.join(hp.module_output, hp.result_output)
+                model_save_path = os.path.join(hp.module_output, hp.model_save_name)
+                torch.save(model, model_save_path)
+                with open(metric_output, 'a') as fout:
+                  fout.write(f"=========eval dev at epoch={epoch}=========\n")
+                  fout.write(metric_dev)
+                  fout.write(f"\n=========eval test at epoch={epoch}=========\n")
+                  fout.write(metric_test)
+                  fout.write('\n\n')
 
         if hp.telegram_bot_token:
             report_to_telegram('[epoch {}] dev\n{}'.format(epoch, metric_dev), TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
