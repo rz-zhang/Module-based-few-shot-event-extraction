@@ -42,9 +42,17 @@ class Net(nn.Module):
             #nn.ReLU(),
             #nn.Linear(argument_size, argument_size),
         )
+<<<<<<< HEAD
         self.module_list = nn.ModuleList(
             nn.Sequential(nn.Linear(argument_hidden_size, module_argument_size),) for _ in range(28)
         )
+=======
+
+        self.module_list = nn.ModuleList(
+            nn.Sequential(nn.Linear(hidden_size * 2, module_argument_size),) for _ in range(28)
+        )
+
+>>>>>>> 3c95077f331d015dc00ce76a31e91e943407db44
         self.top_select = nn.Sequential(
                 nn.Linear(1+1+3+768, 1),
                 #nn.Sigmoid()
@@ -58,6 +66,7 @@ class Net(nn.Module):
             return None
         return self.module_list[module_argument-2]
 
+<<<<<<< HEAD
     def srl_embed_2d(self, srl_triggers):
         srl_x_2d = []
         for seq in srl_triggers:
@@ -72,6 +81,9 @@ class Net(nn.Module):
         
 
     def predict_triggers(self, tokens_x_2d, entities_x_3d, postags_x_2d, head_indexes_2d, triggers_y_2d, arguments_2d, srl_triggers, train_mode=True):
+=======
+    def predict_triggers(self, tokens_x_2d, entities_x_3d, postags_x_2d, head_indexes_2d, triggers_y_2d, arguments_2d):
+>>>>>>> 3c95077f331d015dc00ce76a31e91e943407db44
         tokens_x_2d = torch.LongTensor(tokens_x_2d).to(self.device)
         postags_x_2d = torch.LongTensor(postags_x_2d).to(self.device)
         triggers_y_2d = torch.LongTensor(triggers_y_2d).to(self.device)
